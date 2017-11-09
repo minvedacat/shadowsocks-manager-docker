@@ -65,3 +65,33 @@ app.filter('timeagoshort', function() {
     return ret + retTail;
   };
 });
+
+app.filter('translateTime', ['$translate', $translate => {
+  return input => {
+    const currentLanguage = $translate.use();
+    if(currentLanguage === 'zh-CN') {
+      return input;
+    } else if (currentLanguage === 'en-US') {
+      const matchDay = input.match(/([0-9]){1,}天/);
+      const matchHour = input.match(/([0-9]){1,}小时/);
+      const matchMinute = input.match(/([0-9]){1,}分/);
+      let ret = '';
+      if(matchDay) {
+        ret += matchDay[0].substr(0, matchDay[0].length - 1) + (+matchDay[0].substr(0, matchDay[0].length - 1) <= 1 ? ' day ' : ' days ');
+      }
+      if(matchHour) {
+        ret += matchHour[0].substr(0, matchHour[0].length - 2) + (+matchHour[0].substr(0, matchHour[0].length - 2) <= 1 ? ' hour ' : ' hours ');
+      }
+      if(matchMinute) {
+        ret += matchMinute[0].substr(0, matchMinute[0].length - 1) + (+matchMinute[0].substr(0, matchMinute[0].length - 1) <= 1 ? ' min ' : ' mins');
+      }
+      if(input.match(/几秒/)) {
+        ret += 'a few seconds';
+      }
+      if(input.match(/前$/)) {
+        ret += ' ago';
+      }
+      return ret;
+    }
+  };
+}]);

@@ -8,44 +8,14 @@ const webpackStream = require('webpack-stream');
 gulp.task('clean', () => {
   return del([
     'lib',
-    'plugins/freeAccount/libs/bundle.js',
     'plugins/webgui/libs/bundle.js',
   ]);
 });
 
-gulp.task('freeAccountBuild', () => {
-  return gulp.src([
-    'plugins/freeAccount/public/**',
-  ])
-  .pipe(webpackStream({
-    entry: './plugins/freeAccount/public/app.js',
-    output: {
-      path: path.resolve(__dirname, 'libs'),
-      filename: 'bundle.js'
-    },
-    module: {
-      loaders: [{
-        test: /\.js$/,
-        loader: 'babel-loader',
-        query: {
-          presets: ['es2015']
-        }
-      }]
-    },
-    plugins: [new webpack.optimize.UglifyJsPlugin({
-      compress: {
-        warnings: false
-      }
-    })]
-  }))
-  .pipe(gulp.dest('plugins/freeAccount/libs'));
-});
-
-gulp.task('freeAccountCopy', ['freeAccountBuild'], () => {
+gulp.task('freeAccountCopy', ['clean'], () => {
   return gulp
     .src([
       'plugins/freeAccount/libs/**',
-      'plugins/freeAccount/public/**',
       'plugins/freeAccount/views/**',
     ], {
       base: './'
@@ -63,12 +33,31 @@ gulp.task('webguiBuild', () => {
       path: path.resolve(__dirname, 'libs'),
       filename: 'bundle.js'
     },
+    externals: [
+      {
+        window: 'window'
+      }
+    ],
     module: {
       loaders: [{
         test: /\.js$/,
         loader: 'babel-loader',
         query: {
-          presets: ['es2015']
+          presets: [
+            [
+              'env', {
+                targets: {
+                  browsers: [
+                    'Chrome >= 52',
+                    'FireFox >= 44',
+                    'Safari >= 7',
+                    'Explorer 11',
+                    'last 4 Edge versions'
+                  ]
+                }
+              }
+            ]
+          ]
         }
       }]
     },
@@ -110,12 +99,19 @@ gulp.task('babel', ['webguiCopy', 'freeAccountCopy', 'babelCopy'], () => {
     '!node_modules/**',
     '!lib/**',
     '!plugins/freeAccount/libs/**',
-    '!plugins/freeAccount/public/**',
     '!plugins/webgui/libs/**',
     '!plugins/webgui/public/**',
   ])
   .pipe(babel({
-    presets: ['stage-3'],
+    presets: [
+      [
+        'env', {
+          targets: {
+            node: '6.0'
+          },
+        }
+      ]
+    ],
   }))
   .pipe(gulp.dest('lib'));
 });

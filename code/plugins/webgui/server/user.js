@@ -1,5 +1,3 @@
-'use strict';
-
 const user = appRequire('plugins/user/index');
 const account = appRequire('plugins/account/index');
 const flow = appRequire('plugins/flowSaver/flow');
@@ -31,6 +29,7 @@ exports.getAccount = (req, res) => {
           f.data.to = f.data.from + time[f.type];
         }
       }
+      f.server = f.server ? JSON.parse(f.server) : f.server;
     });
     res.send(success);
   }).catch(err => {
@@ -75,8 +74,42 @@ exports.getOneAccount = (req, res) => {
 };
 
 exports.getServers = (req, res) => {
-  knex('server').select(['id', 'host', 'name', 'method']).orderBy('name').then(success => {
-    res.send(success);
+  const userId = req.session.user;
+  let servers;
+  knex('server').select(['id', 'host', 'name', 'method', 'scale', 'comment', 'shift']).orderBy('name')
+  .then(success => {
+    servers = success;
+    return account.getAccount({
+      userId,
+    }).then(accounts => {
+      return accounts.map(f => {
+        f.server = f.server ? JSON.parse(f.server) : f.server;
+        return f;
+      });
+    });
+  })
+  .then(success => {
+    if(!success.length) {
+      return res.send([]);
+    }
+    const isAll = success.some(account => {
+      if(!account.server) { return true; }
+    });
+    if(isAll) {
+      return res.send(servers);
+    } else {
+      let accountArray = [];
+      success.forEach(account => {
+        account.server.forEach(s => {
+          if(accountArray.indexOf(s) < 0) {
+            accountArray.push(s);
+          }
+        });
+      });
+      return res.send(servers.filter(f => {
+        return accountArray.indexOf(f.id) >= 0;
+      }));
+    }
   }).catch(err => {
     console.log(err);
     res.status(500).end();
@@ -85,10 +118,10 @@ exports.getServers = (req, res) => {
 
 exports.getServerPortFlow = (req, res) => {
   const serverId = +req.params.serverId;
-  const port = +req.params.port;
+  const accountId = +req.params.accountId;
   let account = null;
   knex('account_plugin').select().where({
-    port,
+    id: accountId,
   }).then(success => {
     if(!success.length) {
       return Promise.reject('account not found');
@@ -111,7 +144,7 @@ exports.getServerPortFlow = (req, res) => {
           i++;
         }
       }
-      return knex('webguiSetting').select().where({ key: 'system' })
+      return knex('webguiSetting').select().where({ key: 'account' })
       .then(success => {
         if(!success.length) {
           return Promise.reject('settings not found');
@@ -119,7 +152,7 @@ exports.getServerPortFlow = (req, res) => {
         success[0].value = JSON.parse(success[0].value);
         return success[0].value.multiServerFlow;
       }).then(isMultiServerFlow => {
-        return flow.getServerPortFlow(serverId, port, timeArray, isMultiServerFlow);
+        return flow.getServerPortFlow(serverId, accountId, timeArray, isMultiServerFlow);
       });
     } else {
       return [ 0 ];
@@ -134,8 +167,8 @@ exports.getServerPortFlow = (req, res) => {
 
 exports.getServerPortLastConnect = (req, res) => {
   const serverId = +req.params.serverId;
-  const port = +req.params.port;
-  flow.getlastConnectTime(serverId, port)
+  const accountId = +req.params.accountId;
+  flow.getlastConnectTime(serverId, accountId)
   .then(success => {
     res.send(success);
   }).catch(err => {
@@ -144,10 +177,10 @@ exports.getServerPortLastConnect = (req, res) => {
   });
 };
 
-exports.changePassword = (req, res) => {
+exports.changeShadowsocksPassword = (req, res) => {
   const accountId = +req.params.accountId;
   const password = req.body.password;
-  if(!password) { return res.status(403).end(); };
+  if(!password) { return res.status(403).end(); }
   const isUserHasTheAccount = (accountId) => {
     return account.getAccount({userId: req.session.user, id: accountId}).then(success => {
       if(success.length) {
@@ -179,8 +212,18 @@ exports.createOrder = (req, res) => {
   else if(orderType === 'season') { type = 6; }
   else if(orderType === 'year') { type = 7; }
   else { return res.status(403).end(); }
-  amount = config.plugins.account.pay[orderType].price;
-  alipay.createOrder(userId, accountId, amount, type).then(success => {
+  knex('webguiSetting').select().where({
+    key: 'payment',
+  }).then(success => {
+    if(!success.length) {
+      return Promise.reject('settings not found');
+    }
+    success[0].value = JSON.parse(success[0].value);
+    return success[0].value;
+  }).then(success => {
+    amount = success[orderType].alipay;
+    return alipay.createOrder(userId, accountId, amount, type);
+  }).then(success => {
     return res.send(success);
   }).catch(err => {
     console.log(err);
@@ -206,11 +249,27 @@ exports.alipayCallback = (req, res) => {
 };
 
 exports.getPrice = (req, res) => {
-  const price = {};
-  for(const p in config.plugins.account.pay) {
-    price[p] = config.plugins.account.pay[p].price;
-  }
-  return res.send(price);
+  const price = {
+    alipay: {},
+    paypal: {},
+  };
+  knex('webguiSetting').select().where({
+    key: 'payment',
+  }).then(success => {
+    if(!success.length) {
+      return Promise.reject('settings not found');
+    }
+    success[0].value = JSON.parse(success[0].value);
+    return success[0].value;
+  }).then(success => {
+    for(const s in success) {
+      price.alipay[s] = success[s].alipay;
+      price.paypal[s] = success[s].paypal;
+    }
+    return res.send(price);
+  }).catch(() => {
+    res.status(403).end();
+  });
 };
 
 exports.getNotice = (req, res) => {
@@ -224,6 +283,88 @@ exports.getNotice = (req, res) => {
 
 exports.getAlipayStatus = (req, res) => {
   return res.send({
-    status: config.plugins.alipay.use,
+    status: config.plugins.alipay && config.plugins.alipay.use,
+  });
+};
+
+exports.getMultiServerFlowStatus = (req, res) => {
+  knex('webguiSetting').select().where({
+    key: 'account',
+  }).then(success => {
+    if(!success.length) {
+      return Promise.reject('settings not found');
+    }
+    success[0].value = JSON.parse(success[0].value);
+    return success[0];
+  }).then(success => {
+    return res.send({ status: success.value.multiServerFlow });
+  }).catch(err => {
+    console.log(err);
+    res.status(403).end();
+  });
+};
+
+const paypal = appRequire('plugins/paypal/index');
+
+exports.createPaypalOrder = (req, res) => {
+  const userId = req.session.user;
+  const accountId = req.body.accountId;
+  const orderType = req.body.orderType;
+  let type;
+  let amount;
+  if(orderType === 'week') { type = 2; }
+  else if(orderType === 'month') { type = 3; }
+  else if(orderType === 'day') { type = 4; }
+  else if(orderType === 'hour') { type = 5; }
+  else if(orderType === 'season') { type = 6; }
+  else if(orderType === 'year') { type = 7; }
+  else { return res.status(403).end(); }
+  // amount = config.plugins.account.pay[orderType].price;
+  knex('webguiSetting').select().where({
+    key: 'payment',
+  }).then(success => {
+    if(!success.length) {
+      return Promise.reject('settings not found');
+    }
+    success[0].value = JSON.parse(success[0].value);
+    return success[0].value;
+  }).then(success => {
+    amount = success[orderType].paypal;
+    return paypal.createOrder(userId, accountId, amount, type);
+  }).then(success => {
+    res.send(success);
+  })
+  .catch(error => {
+    res.status(403).end();
+  });
+};
+
+exports.executePaypalOrder = (req, res) => {
+  paypal.executeOrder(req.body)
+  .then(success => {
+    res.send(success);
+  })
+  .catch(error => {
+    res.status(403).end();
+  });
+};
+
+exports.paypalCallback = (req, res) => {
+  console.log(req.body);
+  return res.send('success');
+};
+
+exports.changePassword = (req, res) => {
+  const oldPassword = req.body.password;
+  const newPassword = req.body.newPassword;
+  if(!oldPassword || !newPassword) {
+    return res.status(403).end();
+  }
+  const userId = req.session.user;
+  user.changePassword(userId, oldPassword, newPassword).then(success => {
+    res.send('success');
+  }).catch(err => {
+    console.log(err);
+    res.status(403).end();
   });
 };

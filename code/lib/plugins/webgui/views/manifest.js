@@ -2,7 +2,7 @@ const gcmSenderId = appRequire('services/config').get('plugins.webgui.gcmSenderI
 
 const manifest = {
   short_name: 'ssmgr',
-  name: 'Fuck The Wall',
+  name: '带你看世界',
   start_url: '/',
   display: 'standalone',
   background_color: 'rgb(69, 70, 72)',

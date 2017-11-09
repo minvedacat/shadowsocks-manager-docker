@@ -93,18 +93,24 @@ app.controller('AdminAccountController', ['$scope', '$state', '$stateParams', '$
         return {
           background: 'red-50', 'border-color': 'red-300',
         };
+      } else if(account.autoRemove) {
+        return {
+          background: 'lime-50', 'border-color': 'lime-300',
+        };
       }
       return {};
     };
   }
 ])
-.controller('AdminAccountPageController', ['$scope', '$state', '$stateParams', '$http', '$mdMedia', '$q', 'adminApi', '$timeout', '$interval',
-  ($scope, $state, $stateParams, $http, $mdMedia, $q, adminApi, $timeout, $interval) => {
+.controller('AdminAccountPageController', ['$scope', '$state', '$stateParams', '$http', '$mdMedia', '$q', 'adminApi', '$timeout', '$interval', 'qrcodeDialog', 'ipDialog',
+  ($scope, $state, $stateParams, $http, $mdMedia, $q, adminApi, $timeout, $interval, qrcodeDialog, ipDialog) => {
     $scope.setTitle('账号');
     $scope.setMenuButton('arrow_back', 'admin.account');
+    $scope.accountId = +$stateParams.accountId;
     $q.all([
-      $http.get('/api/admin/account/' + $stateParams.accountId),
+      $http.get(`/api/admin/account/${ $scope.accountId }`),
       $http.get('/api/admin/server'),
+      $http.get('/api/admin/setting/account'),
     ]).then(success => {
       $scope.account = success[0].data;
       $scope.servers = success[1].data.map(server => {
@@ -113,31 +119,41 @@ app.controller('AdminAccountController', ['$scope', '$state', '$stateParams', '$
         }
         return server;
       });
-      $scope.getServerPortData($scope.servers[0].id, $scope.account.port);
+      $scope.getServerPortData($scope.servers[0], $scope.accountId);
+      $scope.isMultiServerFlow = success[2].data.multiServerFlow;
+    }).catch(err => {
+      console.log(err);
+      $state.go('admin.account');
     });
     let currentServerId;
-    $scope.getServerPortData = (serverId, port) => {
+    $scope.getServerPortData = (server, accountId) => {
+      const serverId = server.id;
       currentServerId = serverId;
       $scope.serverPortFlow = 0;
       $scope.lastConnect = 0;
-      adminApi.getServerPortData(serverId, port).then(success => {
+      adminApi.getServerPortData(serverId, accountId).then(success => {
         $scope.serverPortFlow = success.serverPortFlow;
         $scope.lastConnect = success.lastConnect;
+        let maxFlow = 0;
+        if($scope.account.data) {
+          maxFlow = $scope.account.data.flow * ($scope.isMultiServerFlow ? 1 : server.scale);
+        }
+        server.isFlowOutOfLimit = maxFlow ? ($scope.serverPortFlow >= maxFlow) : false;
       });
       $scope.getChartData(serverId);
       $scope.servers.forEach((server, index) => {
         if(server.id === serverId) { return; }
         $timeout(() => {
-          adminApi.getServerPortData(server.id, port);
+          adminApi.getServerPortData(serverId, accountId);
         }, index * 1000);
       });
     };
     $scope.setInterval($interval(() => {
       const serverId = currentServerId;
-      adminApi.getServerPortData(serverId, $scope.account.port).then(success => {
+      adminApi.getServerPortData(serverId, $scope.accountId).then(success => {
         if(serverId !== currentServerId) { return; }
         $scope.lastConnect = success.lastConnect;
-        $scope.serverPortFlow = success.flow;
+        $scope.serverPortFlow = success.serverPortFlow;
       });
     }, 60 * 1000));
     const base64Encode = str => {
@@ -145,8 +161,12 @@ app.controller('AdminAccountController', ['$scope', '$state', '$stateParams', '$
         return String.fromCharCode('0x' + p1);
       }));
     };
-    $scope.createQrCode = (method, password, host, port) => {
+    $scope.createQrCode = (method, password, host, port, serverName) => {
       return 'ss://' + base64Encode(method + ':' + password + '@' + host + ':' + port);
+    };
+    $scope.showQrcodeDialog = (method, password, host, port, serverName) => {
+      const ssAddress = $scope.createQrCode(method, password, host, port, serverName);
+      qrcodeDialog.show(serverName, ssAddress);
     };
     $scope.editAccount = id => {
       $state.go('admin.editAccount', { accountId: id });
@@ -238,8 +258,8 @@ app.controller('AdminAccountController', ['$scope', '$state', '$stateParams', '$
         },
       };
     };
-    $scope.getChartData = (serverId) => {
-      adminApi.getAccountChartData(serverId, $stateParams.accountId, $scope.account.port, $scope.flowType.value, flowTime[$scope.flowType.value])
+    $scope.getChartData = serverId => {
+      adminApi.getAccountChartData(serverId, $scope.accountId, $scope.flowType.value, flowTime[$scope.flowType.value])
       .then(success => {
         $scope.sumFlow = success[0].data.reduce((a, b) => {
           return a + b;
@@ -306,10 +326,25 @@ app.controller('AdminAccountController', ['$scope', '$state', '$stateParams', '$
       if(!userId) { return; }
       $state.go('admin.userPage', { userId });
     };
+    $scope.clientIp = (serverId, accountId) => {
+      ipDialog.show(serverId, accountId);
+    };
+    $scope.cycleStyle = account => {
+      let percent = 0;
+      if(account.type !== 1) {
+        percent = ((Date.now() - account.data.from) / (account.data.to - account.data.from) * 100).toFixed(0);
+      }
+      if(percent > 100) {
+        percent = 100;
+      }
+      return {
+        background: `linear-gradient(90deg, rgba(0,0,0,0.12) ${ percent }%, rgba(0,0,0,0) 0%)`
+      };
+    };
   }
 ])
-.controller('AdminAddAccountController', ['$scope', '$state', '$stateParams', '$http', '$mdBottomSheet',
-  ($scope, $state, $stateParams, $http, $mdBottomSheet) => {
+.controller('AdminAddAccountController', ['$scope', '$state', '$stateParams', '$http', '$mdBottomSheet', 'alertDialog',
+  ($scope, $state, $stateParams, $http, $mdBottomSheet, alertDialog) => {
     $scope.setTitle('添加账号');
     $scope.setMenuButton('arrow_back', 'admin.account');
     $scope.typeList = [
@@ -335,6 +370,7 @@ app.controller('AdminAccountController', ['$scope', '$state', '$stateParams', '$
       $state.go('admin.account');
     };
     $scope.confirm = () => {
+      alertDialog.loading();
       $http.post('/api/admin/account', {
         type: +$scope.account.type,
         port: +$scope.account.port,
@@ -344,7 +380,10 @@ app.controller('AdminAccountController', ['$scope', '$state', '$stateParams', '$
         flow: +$scope.account.flow * 1000 * 1000,
         autoRemove: $scope.account.autoRemove ? 1 : 0,
       }).then(success => {
+        alertDialog.show('添加账号成功', '确定');
         $state.go('admin.account');
+      }).catch(() => {
+        alertDialog.show('添加账号失败', '确定');
       });
     };
     $scope.pickTime = () => {
@@ -365,8 +404,8 @@ app.controller('AdminAccountController', ['$scope', '$state', '$stateParams', '$
     };
   }
 ])
-.controller('AdminEditAccountController', ['$scope', '$state', '$stateParams', '$http', '$mdBottomSheet', 'confirmDialog',
-  ($scope, $state, $stateParams, $http, $mdBottomSheet, confirmDialog) => {
+.controller('AdminEditAccountController', ['$scope', '$state', '$stateParams', '$http', '$mdBottomSheet', 'confirmDialog', 'alertDialog',
+  ($scope, $state, $stateParams, $http, $mdBottomSheet, confirmDialog, alertDialog) => {
     $scope.setTitle('编辑账号');
     $scope.setMenuButton('arrow_back', function() {
       $state.go('admin.accountPage', { accountId: $stateParams.accountId });
@@ -391,7 +430,10 @@ app.controller('AdminAccountController', ['$scope', '$state', '$stateParams', '$
       autoRemove: 0,
     };
     const accountId = $stateParams.accountId;
-    $http.get('/api/admin/account/' + accountId).then(success => {
+    $http.get('/api/admin/server').then(success => {
+      $scope.servers = success.data;
+      return $http.get(`/api/admin/account/${ accountId }`);
+    }).then(success => {
       $scope.account.type = success.data.type;
       $scope.account.port = success.data.port;
       $scope.account.password = success.data.password;
@@ -401,12 +443,32 @@ app.controller('AdminAccountController', ['$scope', '$state', '$stateParams', '$
         $scope.account.limit = success.data.data.limit;
         $scope.account.flow = success.data.data.flow / 1000000;
       }
+      $scope.account.server = success.data.server;
+      $scope.accountServer = !!$scope.account.server;
+      $scope.accountServerObj = {};
+      if($scope.account.server) {
+        $scope.servers.forEach(server => {
+          if($scope.account.server.indexOf(server.id) >= 0) {
+            $scope.accountServerObj[server.id] = true;
+          } else {
+            $scope.accountServerObj[server.id] = false;
+          }
+        });
+      }
     });
     $scope.cancel = () => {
       $state.go('admin.accountPage', { accountId: $stateParams.accountId });
     };
     $scope.confirm = () => {
-      $http.put('/api/admin/account/' + accountId + '/data', {
+      alertDialog.loading();
+      const server = Object.keys($scope.accountServerObj)
+      .map(m => {
+        if($scope.accountServerObj[m]) {
+          return +m;
+        }
+      })
+      .filter(f => f);
+      $http.put(`/api/admin/account/${ accountId }/data`, {
         type: +$scope.account.type,
         port: +$scope.account.port,
         password: $scope.account.password,
@@ -414,8 +476,12 @@ app.controller('AdminAccountController', ['$scope', '$state', '$stateParams', '$
         limit: +$scope.account.limit,
         flow: +$scope.account.flow * 1000 * 1000,
         autoRemove: $scope.account.autoRemove ? 1 : 0,
+        server: $scope.accountServer ? server : null,
       }).then(success => {
+        alertDialog.show('修改账号成功', '确定');
         $state.go('admin.accountPage', { accountId: $stateParams.accountId });
+      }).catch(() => {
+        alertDialog.show('修改账号失败', '确定');
       });
     };
     $scope.pickTime = () => {
@@ -427,6 +493,9 @@ app.controller('AdminAccountController', ['$scope', '$state', '$stateParams', '$
     };
     $scope.setStartTime = (number) => {
       $scope.account.time += number;
+    };
+    $scope.setStartTimeToCurrentTime = () => {
+      $scope.account.time = Date.now();
     };
     $scope.setLimit = (number) => {
       $scope.account.limit += number;
